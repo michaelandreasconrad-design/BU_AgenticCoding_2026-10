@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import os
 import anthropic
+import shutil
 
 IGNORIERTE_DATEIEN = {"QUELLEN_echte-daten.md"}
 TEXT_ENDUNGEN = {".txt", ".md", ".csv", ".log", ".py", ".json", ".xml", ".html"}
@@ -104,3 +105,66 @@ def klassifiziere_mit_claude(inventar: list[dict]) -> dict[str, str]:
         for name, kat in mapping.items()
     })
     return result
+
+
+def finde_duplikate(inventar: list[dict]) -> set[str]:
+    """Gibt Dateinamen zurück, die byte-identische Duplikate eines anderen Eintrags sind."""
+    gesehen: dict[str, str] = {}  # md5 → erster Dateiname
+    duplikate: set[str] = set()
+    for eintrag in inventar:
+        md5 = eintrag["md5"]
+        if md5 in gesehen:
+            duplikate.add(eintrag["name"])
+        else:
+            gesehen[md5] = eintrag["name"]
+    return duplikate
+
+
+def _eindeutiger_zielpfad(zielordner: Path, dateiname: str) -> Path:
+    """Gibt einen Pfad zurück, der noch nicht existiert (fügt _2, _3 ... ein)."""
+    ziel = zielordner / dateiname
+    if not ziel.exists():
+        return ziel
+    stamm = ziel.stem
+    suffix = ziel.suffix
+    zaehler = 2
+    while True:
+        kandidat = zielordner / f"{stamm}_{zaehler}{suffix}"
+        if not kandidat.exists():
+            return kandidat
+        zaehler += 1
+
+
+def plane_verschiebungen(
+    inventar: list[dict],
+    mapping: dict[str, str],
+    duplikate: set[str],
+    basisordner: Path,
+) -> list[dict]:
+    """Erstellt einen Aktionsplan, ohne Dateien zu verschieben."""
+    plan = []
+    for eintrag in inventar:
+        name = eintrag["name"]
+        kategorie = "Duplikate" if name in duplikate else mapping.get(name, "Sonstiges")
+        zielordner = basisordner / kategorie
+        ziel = _eindeutiger_zielpfad(zielordner, name)
+        aktion = "duplikat" if name in duplikate else "verschieben"
+        plan.append({
+            "von": name,
+            "nach": str(ziel),
+            "kategorie": kategorie,
+            "aktion": aktion,
+        })
+    return plan
+
+
+def fuehre_plan_aus(plan: list[dict], basisordner: Path) -> None:
+    """Verschiebt Dateien gemäß Plan."""
+    erstellte_ordner: set[Path] = set()
+    for aktion in plan:
+        ziel = Path(aktion["nach"])
+        if ziel.parent not in erstellte_ordner:
+            ziel.parent.mkdir(parents=True, exist_ok=True)
+            erstellte_ordner.add(ziel.parent)
+        quelle = basisordner / aktion["von"]
+        shutil.move(str(quelle), str(ziel))

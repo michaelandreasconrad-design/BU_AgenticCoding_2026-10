@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from kategorisierer import lade_datei_inventar, IGNORIERTE_DATEIEN, klassifiziere_mit_claude, GUELTIGE_KATEGORIEN
+from kategorisierer import lade_datei_inventar, IGNORIERTE_DATEIEN, klassifiziere_mit_claude, GUELTIGE_KATEGORIEN, finde_duplikate, plane_verschiebungen
 
 
 def test_inventar_liest_textdatei(tmp_path):
@@ -107,3 +107,41 @@ def test_klassifikation_fehlt_datei_wird_sonstiges():
     # Fehlende Datei sollte auf "Sonstiges" fallen
     assert ergebnis["memo.txt"] == "Sonstiges"
     assert len(ergebnis) == 3
+
+
+def test_duplikat_erkennung():
+    inventar = [
+        {"name": "foto.jpg", "md5": "abc123", "path": Path("/tmp/foto.jpg")},
+        {"name": "foto - Kopie.jpg", "md5": "abc123", "path": Path("/tmp/foto - Kopie.jpg")},
+        {"name": "rechnung.txt", "md5": "def456", "path": Path("/tmp/rechnung.txt")},
+    ]
+    duplikate = finde_duplikate(inventar)
+    assert "foto - Kopie.jpg" in duplikate or "foto.jpg" in duplikate
+    assert "rechnung.txt" not in duplikate
+
+
+def test_verschiebungsplan_respektiert_duplikate(tmp_path):
+    inventar = [
+        {"name": "foto.jpg", "md5": "abc123", "path": tmp_path / "foto.jpg", "extension": ".jpg"},
+        {"name": "kopie.jpg", "md5": "abc123", "path": tmp_path / "kopie.jpg", "extension": ".jpg"},
+    ]
+    mapping = {"foto.jpg": "Fotos", "kopie.jpg": "Fotos"}
+    duplikate = {"kopie.jpg"}
+    plan = plane_verschiebungen(inventar, mapping, duplikate, tmp_path)
+
+    aktionen = {a["von"]: a["aktion"] for a in plan}
+    assert aktionen["foto.jpg"] == "verschieben"
+    assert aktionen["kopie.jpg"] == "duplikat"
+
+
+def test_verschiebungsplan_vermeidet_ueberschreiben(tmp_path):
+    (tmp_path / "Rechnungen").mkdir()
+    (tmp_path / "Rechnungen" / "rechnung.txt").write_text("alt")
+
+    inventar = [
+        {"name": "rechnung.txt", "md5": "neu123", "path": tmp_path / "rechnung.txt", "extension": ".txt"},
+    ]
+    mapping = {"rechnung.txt": "Rechnungen"}
+    plan = plane_verschiebungen(inventar, mapping, set(), tmp_path)
+
+    assert plan[0]["nach"].endswith("rechnung_2.txt") or "_2" in plan[0]["nach"]
