@@ -1,9 +1,35 @@
 import hashlib
 from pathlib import Path
+import json
+import os
+import anthropic
 
 IGNORIERTE_DATEIEN = {"QUELLEN_echte-daten.md"}
 TEXT_ENDUNGEN = {".txt", ".md", ".csv", ".log", ".py", ".json", ".xml", ".html"}
 VORSCHAU_ZEICHEN = 800
+
+GUELTIGE_KATEGORIEN = {
+    "Rechnungen", "Briefe", "Vertraege", "Notizen",
+    "Fotos", "Screenshots", "Daten", "Duplikate", "Sonstiges",
+}
+
+SYSTEM_PROMPT = """\
+Du bist ein Datei-Kategorisierer. Du erhältst eine Liste von Dateien mit Name,
+Endung und (für Textdateien) einem Inhalts-Vorschau. Gib als Antwort ausschließlich
+ein JSON-Objekt zurück: {"Dateiname": "Kategorie", ...}.
+
+Erlaubte Kategorien:
+- Rechnungen: Rechnungen, Belege, Bestellbestätigungen, Kontoauszüge
+- Briefe: Briefe, E-Mails, Anschreiben, Behördenschreiben
+- Vertraege: Mietverträge, Kaufverträge, Vereinbarungen
+- Notizen: Besprechungsnotizen, To-do-Listen, Memos
+- Fotos: Fotos, Bilder (JPG, JPEG, PNG die kein Screenshot sind)
+- Screenshots: Screenshots von Bildschirmen, App-UIs
+- Daten: Tabellen, CSV-Dateien mit Messdaten oder Finanzdaten
+- Sonstiges: alles, was nicht eindeutig zuzuordnen ist
+
+Antworte NUR mit dem JSON-Objekt, ohne Erklärung oder Markdown-Blöcke.\
+"""
 
 
 def lade_datei_inventar(ordner: Path) -> list[dict]:
@@ -35,3 +61,44 @@ def lade_datei_inventar(ordner: Path) -> list[dict]:
             "md5": md5,
         })
     return inventar
+
+
+def klassifiziere_mit_claude(inventar: list[dict]) -> dict[str, str]:
+    """Sendet das Inventar an Claude und gibt ein Mapping Dateiname→Kategorie zurück."""
+    if not inventar:
+        return {}
+
+    zeilen = []
+    for eintrag in inventar:
+        zeile = f"- {eintrag['name']} ({eintrag['extension']})"
+        if eintrag["content_preview"]:
+            zeile += f"\n  Inhalt: {eintrag['content_preview'][:400]}"
+        zeilen.append(zeile)
+
+    nutzerprompt = "Bitte kategorisiere diese Dateien:\n\n" + "\n".join(zeilen)
+
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-opus-5-5",
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": nutzerprompt}],
+    )
+
+    rohtext = response.content[0].text.strip()
+    # JSON aus eventuellen Markdown-Codeblöcken befreien
+    if rohtext.startswith("```"):
+        rohtext = "\n".join(rohtext.split("\n")[1:])
+    rohtext = rohtext.rstrip("`").strip()
+
+    try:
+        mapping = json.loads(rohtext)
+    except json.JSONDecodeError:
+        # Fallback: alle Dateien → Sonstiges
+        return {e["name"]: "Sonstiges" for e in inventar}
+
+    # Ungültige Kategorien auf Sonstiges normieren
+    return {
+        name: (kat if kat in GUELTIGE_KATEGORIEN else "Sonstiges")
+        for name, kat in mapping.items()
+    }

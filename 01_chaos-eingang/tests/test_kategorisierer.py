@@ -2,12 +2,13 @@ import pytest
 from pathlib import Path
 import tempfile
 import os
+from unittest.mock import patch, MagicMock
 
 # Damit der Import funktioniert, muss kategorisierer.py im Elternordner liegen
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from kategorisierer import lade_datei_inventar, IGNORIERTE_DATEIEN
+from kategorisierer import lade_datei_inventar, IGNORIERTE_DATEIEN, klassifiziere_mit_claude, GUELTIGE_KATEGORIEN
 
 
 def test_inventar_liest_textdatei(tmp_path):
@@ -43,3 +44,39 @@ def test_inventar_toleriert_encoding_fehler(tmp_path):
     inventar = lade_datei_inventar(tmp_path)
     assert len(inventar) == 1
     assert "content_preview" in inventar[0]
+
+
+def test_klassifikation_parst_json():
+    inventar = [
+        {"name": "rechnung.txt", "extension": ".txt", "content_preview": "Amazon Rechnung"},
+        {"name": "foto.jpg", "extension": ".jpg", "content_preview": ""},
+    ]
+    antwort_json = '{"rechnung.txt": "Rechnungen", "foto.jpg": "Fotos"}'
+    mock_response = MagicMock()
+    mock_response.content[0].text = antwort_json
+
+    with patch("kategorisierer.anthropic.Anthropic") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        ergebnis = klassifiziere_mit_claude(inventar)
+
+    assert ergebnis["rechnung.txt"] == "Rechnungen"
+    assert ergebnis["foto.jpg"] == "Fotos"
+
+
+def test_klassifikation_faellt_auf_sonstiges_zurueck():
+    inventar = [{"name": "kryptisch.xyz", "extension": ".xyz", "content_preview": ""}]
+    antwort_json = '{"kryptisch.xyz": "UnbekannteKategorie"}'
+    mock_response = MagicMock()
+    mock_response.content[0].text = antwort_json
+
+    with patch("kategorisierer.anthropic.Anthropic") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        ergebnis = klassifiziere_mit_claude(inventar)
+
+    assert ergebnis["kryptisch.xyz"] == "Sonstiges"
