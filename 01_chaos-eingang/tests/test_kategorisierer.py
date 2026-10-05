@@ -80,3 +80,30 @@ def test_klassifikation_faellt_auf_sonstiges_zurueck():
         ergebnis = klassifiziere_mit_claude(inventar)
 
     assert ergebnis["kryptisch.xyz"] == "Sonstiges"
+
+
+def test_klassifikation_fehlt_datei_wird_sonstiges():
+    # Claude gibt nicht alle Dateien zurück -> fehlende bekommen "Sonstiges"
+    inventar = [
+        {"name": "rechnung.txt", "extension": ".txt", "content_preview": "Amazon Rechnung"},
+        {"name": "foto.jpg", "extension": ".jpg", "content_preview": ""},
+        {"name": "memo.txt", "extension": ".txt", "content_preview": "Erinnerung"},
+    ]
+    # Claude gibt nur 2 von 3 Dateien zurück
+    antwort_json = '{"rechnung.txt": "Rechnungen", "foto.jpg": "Fotos"}'
+    mock_response = MagicMock()
+    mock_response.content[0].text = antwort_json
+
+    with patch("kategorisierer.anthropic.Anthropic") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.messages.create.return_value = mock_response
+
+        ergebnis = klassifiziere_mit_claude(inventar)
+
+    # Alle 3 Dateien sollten in Ergebnis sein
+    assert ergebnis["rechnung.txt"] == "Rechnungen"
+    assert ergebnis["foto.jpg"] == "Fotos"
+    # Fehlende Datei sollte auf "Sonstiges" fallen
+    assert ergebnis["memo.txt"] == "Sonstiges"
+    assert len(ergebnis) == 3

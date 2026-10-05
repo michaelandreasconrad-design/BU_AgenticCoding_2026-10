@@ -97,8 +97,10 @@ def klassifiziere_mit_claude(inventar: list[dict]) -> dict[str, str]:
         # Fallback: alle Dateien → Sonstiges
         return {e["name"]: "Sonstiges" for e in inventar}
 
-    # Ungültige Kategorien auf Sonstiges normieren
-    return {
+    # Alle Dateien mit Sonstiges initialisieren, dann mit Claude-Klassifikationen überschreiben
+    result = {e["name"]: "Sonstiges" for e in inventar}
+    result.update({
         name: (kat if kat in GUELTIGE_KATEGORIEN else "Sonstiges")
         for name, kat in mapping.items()
-    }
+    })
+    return result
