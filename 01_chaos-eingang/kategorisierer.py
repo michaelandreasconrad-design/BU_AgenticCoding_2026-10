@@ -1,7 +1,9 @@
+import argparse
 import hashlib
 from pathlib import Path
 import json
 import os
+import sys
 import anthropic
 import shutil
 
@@ -168,3 +170,49 @@ def fuehre_plan_aus(plan: list[dict], basisordner: Path) -> None:
             erstellte_ordner.add(ziel.parent)
         quelle = basisordner / aktion["von"]
         shutil.move(str(quelle), str(ziel))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="KI-Datei-Kategorisierer")
+    parser.add_argument("ordner", nargs="?", default=".", help="Zu sortierender Ordner")
+    parser.add_argument("--execute", action="store_true", help="Dateien tatsächlich verschieben")
+    args = parser.parse_args()
+
+    basisordner = Path(args.ordner).resolve()
+    if not basisordner.is_dir():
+        print(f"Fehler: '{basisordner}' ist kein Ordner.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Lese Dateien aus: {basisordner}")
+    inventar = lade_datei_inventar(basisordner)
+    if not inventar:
+        print("Keine Dateien gefunden.")
+        return
+
+    print(f"{len(inventar)} Dateien gefunden. Sende an Claude zur Klassifikation...")
+    try:
+        mapping = klassifiziere_mit_claude(inventar)
+    except anthropic.AuthenticationError:
+        print("Fehler: ANTHROPIC_API_KEY nicht gesetzt oder ungültig.", file=sys.stderr)
+        sys.exit(1)
+
+    duplikate = finde_duplikate(inventar)
+    if duplikate:
+        print(f"Duplikate gefunden: {', '.join(duplikate)}")
+
+    plan = plane_verschiebungen(inventar, mapping, duplikate, basisordner)
+
+    print("\n--- Geplante Aktionen ---")
+    for aktion in plan:
+        symbol = "📋" if not args.execute else "→"
+        print(f"  {symbol} {aktion['von']} → {aktion['kategorie']}/")
+
+    if not args.execute:
+        print("\n[DRY-RUN] Keine Dateien wurden verschoben. Mit --execute ausführen.")
+    else:
+        fuehre_plan_aus(plan, basisordner)
+        print(f"\n✓ {len(plan)} Dateien verschoben.")
+
+
+if __name__ == "__main__":
+    main()

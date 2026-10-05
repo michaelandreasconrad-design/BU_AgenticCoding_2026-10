@@ -3,9 +3,10 @@ from pathlib import Path
 import tempfile
 import os
 from unittest.mock import patch, MagicMock
+import subprocess
+import sys
 
 # Damit der Import funktioniert, muss kategorisierer.py im Elternordner liegen
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kategorisierer import lade_datei_inventar, IGNORIERTE_DATEIEN, klassifiziere_mit_claude, GUELTIGE_KATEGORIEN, finde_duplikate, plane_verschiebungen
@@ -145,3 +146,15 @@ def test_verschiebungsplan_vermeidet_ueberschreiben(tmp_path):
     plan = plane_verschiebungen(inventar, mapping, set(), tmp_path)
 
     assert plan[0]["nach"].endswith("rechnung_2.txt") or "_2" in plan[0]["nach"]
+
+
+def test_dry_run_aendert_keine_dateien(tmp_path):
+    # Integrations-Test: benötigt ANTHROPIC_API_KEY
+    (tmp_path / "rechnung.txt").write_text("Amazon Rechnung 12,99 EUR", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "kategorisierer.py", str(tmp_path)],
+        capture_output=True, text=True, cwd=Path(__file__).parent.parent
+    )
+    # Dry-run: Datei muss noch an Originalposition liegen
+    assert (tmp_path / "rechnung.txt").exists(), "Dry-run darf keine Dateien verschieben"
+    assert result.returncode == 0
